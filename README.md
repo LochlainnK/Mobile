@@ -59,6 +59,22 @@ reference embedded in each APK against the question text. All deliveries are
 downloaded + decoded **in parallel** and submitted in **one batch** — the
 fastest shape and the server-preferred one ("Batch answers in one submit").
 
+### Two artifact-delivery contracts
+
+Days 1–13 serve the artifact directly from `?op=artifact[&delivery=i]`. From
+**day 14** the timed modes use a capability contract: `start`/`retry`/`practice`
+return a `download` field (`/?op=download&capability=<token>`) plus a `sha256`;
+the tool fetches via that capability and verifies the hash. Mastery deliveries
+whose `download` is null still come from `?op=artifact&delivery=i` on the active
+attempt. Both paths are handled automatically.
+
+When ranked variants are exhausted (`unique_attempts_remaining: 0`), a timed
+attempt expires after 30 s and the server returns `next_op: "practice"`. The
+tool then falls back to `op=practice` (untimed, no Hall of Fame) — waiting out
+any still-live attempt (`attempt_active`) — so the mode always completes. Use
+`--fresh` while ranked variants remain to race the 30 s clock for the timed
+leaderboard.
+
 ### Auto-recovery on reject
 
 The decoder exposes *ranked candidates*, not just one answer: the declared

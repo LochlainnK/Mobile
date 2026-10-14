@@ -109,6 +109,27 @@ def artifact(challenge, delivery=None, timeout=60):
     return _get(params, raw=True, timeout=timeout)
 
 
+def download(path, timeout=60):
+    """Fetch an artifact via a capability path from a start/practice response.
+
+    `path` is the response's ``download`` field, e.g.
+    ``/?op=download&capability=<64hex>``.  Newer (day 14+) timed routes serve
+    the artifact only through this one-time capability, not ``op=artifact``.
+    """
+    url = BASE_URL.rstrip("/") + path if path.startswith("/") else path
+    return _curl(url, raw=True, timeout=timeout)
+
+
+def practice(challenge):
+    """Start/continue an UNTIMED practice attempt (no Hall of Fame timer).
+
+    Used once ranked variants are exhausted; the Game Master signals this with
+    ``next_op: "practice"``.  Returns ``error: "attempt_active"`` if a timed
+    attempt is still live, in which case wait for it to expire and retry.
+    """
+    return _post({"op": "practice", "challenge": challenge})
+
+
 def start(challenge, run_for_time=False):
     body = {"op": "start", "challenge": challenge}
     if run_for_time:

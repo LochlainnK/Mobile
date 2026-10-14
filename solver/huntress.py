@@ -18,6 +18,7 @@ Nothing here guesses: every answer is derived from the real downloaded bytes.
 
 import argparse
 import concurrent.futures
+import hashlib
 import sys
 import time
 
@@ -49,11 +50,34 @@ def resolve_ids(day):
     return {m: base + suf for m, suf in MODE_SUFFIX.items()}
 
 
-def _solve_one(challenge_id, question, index, single_delivery):
+def _fetch_artifact(challenge_id, question, index, single_delivery, resp):
+    """Fetch one question's artifact bytes, preferring the capability download.
+
+    Newer timed routes (day 14+) serve the artifact only through a one-time
+    ``download`` capability (``/?op=download&capability=...``) carried on the
+    question (or, for a single-question attempt, at the top level) alongside a
+    ``sha256``.  Older routes serve it via ``op=artifact[&delivery=i]``.  The
+    hash is verified whenever the server provides one.
+    """
+    dl = question.get("download") or (resp.get("download") if single_delivery else None)
+    sha = question.get("sha256") or (resp.get("sha256") if single_delivery else None)
+    if dl:
+        raw = gm.download(dl, timeout=30)
+    else:
+        delivery = None if single_delivery else index
+        raw = gm.artifact(challenge_id, delivery=delivery, timeout=30)
+    if sha:
+        actual = hashlib.sha256(raw).hexdigest()
+        if actual != sha:
+            raise RuntimeError("sha256 mismatch for %s (got %s, want %s)"
+                               % (question.get("id"), actual[:12], sha[:12]))
+    return raw
+
+
+def _solve_one(challenge_id, question, index, single_delivery, resp):
     """Download + decode one question's artifact. Returns a result dict with an
     ordered list of candidate answers (best first) for retry-on-reject."""
-    delivery = None if single_delivery else index
-    raw = gm.artifact(challenge_id, delivery=delivery, timeout=30)
+    raw = _fetch_artifact(challenge_id, question, index, single_delivery, resp)
     info = extract(raw)
     puzzle = info["puzzle"]
     if puzzle is None:
@@ -84,20 +108,47 @@ def _solve_one(challenge_id, question, index, single_delivery):
     }
 
 
+def _begin(challenge_id, fresh):
+    """Obtain a usable, downloadable attempt.
+
+    Tries start (or retry when fresh); if the attempt is expired/absent or the
+    server points to untimed play (``next_op: "practice"`` / exhausted ranked
+    variants), falls back to ``op=practice`` — waiting out any still-live timed
+    attempt (``attempt_active``) so the mode can always be completed.
+    """
+    resp = gm.retry(challenge_id) if fresh else gm.start(challenge_id)
+    need_practice = (
+        not resp.get("questions")
+        or resp.get("result") in ("expired",)
+        or resp.get("error") in ("start_required", "attempt_expired")
+        or resp.get("next_op") == "practice"
+    )
+    if need_practice:
+        for _ in range(15):
+            p = gm.practice(challenge_id)
+            if p.get("error") == "attempt_active":
+                time.sleep(3)
+                continue
+            if p.get("questions"):
+                return p
+            break
+    return resp
+
+
 def solve_mode(challenge_id, submit=False, parallel=True, fresh=False):
     """Solve one challenge (single/time/mastery). Returns a report dict."""
     t0 = time.time()
-    resp = gm.retry(challenge_id) if fresh else gm.start(challenge_id)
+    resp = _begin(challenge_id, fresh)
     questions = resp.get("questions", [])
     if not questions:
         return {"challenge": challenge_id, "error": "no questions in start response",
-                "raw_result": resp.get("result"), "response": resp}
+                "raw_result": resp.get("result") or resp.get("error"), "response": resp}
 
     single_delivery = len(questions) == 1
     results = [None] * len(questions)
 
     def work(i):
-        return i, _solve_one(challenge_id, questions[i], i, single_delivery)
+        return i, _solve_one(challenge_id, questions[i], i, single_delivery, resp)
 
     if parallel and len(questions) > 1:
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(questions)) as ex:
