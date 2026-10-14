@@ -45,17 +45,29 @@ resolves automatically.
 
 ### How the three modes map to the API
 
-| mode        | questions | artifacts                                    | timer |
-|-------------|-----------|----------------------------------------------|-------|
-| Single Solve| 1         | one APK (default delivery)                   | none  |
-| Time Trial  | 1         | one APK                                       | 30 s  |
-| Mastery     | 3         | one APK per delivery (`delivery=0,1,2`)       | 30 s  |
+| mode        | questions | artifacts                                     | timer |
+|-------------|-----------|-----------------------------------------------|-------|
+| Single Solve| 1         | one APK (default delivery)                    | none  |
+| Time Trial  | 1         | one APK                                        | 30 s  |
+| Mastery     | N         | one APK per delivery (`delivery=0..N-1`)       | 30 s  |
 
-For Mastery, question index *i* (0-based, `set{i+1}.answer`) maps to
-`?op=artifact&delivery=i`. The tool verifies this by matching the `MOB-DD-...`
-case reference embedded in each APK against the question text. All deliveries
-are downloaded + decoded **in parallel** and submitted in **one batch** — the
+The Mastery bundle size **varies by day** — released days use 3 *or* 5
+deliveries — so nothing hardcodes the count; the tool reads it from the start
+response's `questions` array. Question index *i* (0-based, `set{i+1}.answer`)
+maps to `?op=artifact&delivery=i`, verified by matching the `MOB-DD-...` case
+reference embedded in each APK against the question text. All deliveries are
+downloaded + decoded **in parallel** and submitted in **one batch** — the
 fastest shape and the server-preferred one ("Batch answers in one submit").
+
+### Auto-recovery on reject
+
+The decoder exposes *ranked candidates*, not just one answer: the declared
+codec's output first, then brute-force alternates. The solver submits the best
+candidate; if the Game Master returns `incorrect` or `accepted` (partial), it
+advances only the still-outstanding `answer_id`s to their next candidate and
+resubmits. Submits are free within an attempt, so this costs no variant and
+stays inside the 30 s window — giving an unseen or ambiguous codec a path to
+CORRECT with no human in the loop.
 
 ## Usage
 
@@ -98,15 +110,23 @@ Flags:
 
 ## Validated
 
-Decoding verified against all released days 1–13 (every codec → valid `ANS-`).
-Live, scored submissions on **fresh unsolved variants** returned `CORRECT`:
+Decoding verified against all released days 1–13 (every codec → valid `ANS-`,
+case reference cross-checked). Live, scored submissions on **fresh unsolved
+variants** returned `CORRECT` for **every codec**:
 
-- Single/Time Trial, `plain` — day 1 (1.8 s total)
-- Time Trial, `caesar` — day 7 (1.9 s)
-- Time Trial, `split` — day 5 (1.5 s)
-- Mastery (3 parallel deliveries, batch submit), `plain` — day 1 (1.8 s)
+| codec   | mode        | day | total |
+|---------|-------------|-----|-------|
+| plain   | Time Trial  | 1   | 1.8 s |
+| reverse | Time Trial  | 2   | 1.4 s |
+| base64  | Time Trial  | 3/9 | 1.6 s |
+| xor     | Time Trial  | 4   | 1.3 s |
+| split   | Time Trial  | 5   | 1.5 s |
+| hex     | Time Trial  | 6   | 1.5 s |
+| caesar  | Time Trial  | 7   | 1.9 s |
 
-All comfortably inside the 30-second timed window.
+Plus Mastery batch submits: **3 deliveries** (day 1, `plain`, 1.8 s) and
+**5 deliveries** (day 8 `reverse` 2.9 s, day 9 `base64` 2.3 s) — all parallel,
+all comfortably inside the 30-second timed window.
 
 ## Layout
 

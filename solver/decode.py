@@ -103,66 +103,81 @@ def _candidates_from_string(s):
                 pass
 
 
-def brute_force(puzzle_or_text):
-    """Return the first ANS- code found by trying every known transform.
+def _brute_answers(puzzle_or_text):
+    """Return all distinct valid ANS- codes found by trying every transform,
+    in discovery order (most-likely transforms first)."""
+    found = []
 
-    Accepts either a puzzle dict or a raw string/bytes blob.
-    """
-    candidates = []
+    def add(s):
+        if isinstance(s, str):
+            m = ANSWER_RE.search(s)
+            if m and m.group(0) not in found:
+                found.append(m.group(0))
+
     if isinstance(puzzle_or_text, dict):
         p = puzzle_or_text
-        # try the split reassembly if parts present
         if "parts" in p and "order" in p:
             try:
                 out = [None] * len(p["parts"])
                 for i, pos in enumerate(p["order"]):
                     out[pos] = p["parts"][i]
-                candidates.append("".join(out))
+                add("".join(out))
             except Exception:
                 pass
         blob = p.get("data")
         if isinstance(blob, (list, tuple)):
             blob = "".join(str(x) for x in blob)
-        if blob is None:
-            blob = ""
-        texts = [str(blob)]
-        # also fold in the declared key for xor/caesar sweeps already covered
+        text = "" if blob is None else str(blob)
     else:
-        blob = puzzle_or_text
-        if isinstance(blob, bytes):
-            blob = blob.decode("latin-1")
-        texts = [blob]
+        text = puzzle_or_text
+        if isinstance(text, bytes):
+            text = text.decode("latin-1")
 
-    for t in texts:
-        for cand in _candidates_from_string(t):
-            if isinstance(cand, str):
-                m = ANSWER_RE.search(cand)
-                if m:
-                    candidates.append(m.group(0))
+    for cand in _candidates_from_string(text):
+        add(cand)
+    return found
 
-    for c in candidates:
-        if is_answer(c):
-            return c
-    # last resort: any ANS- substring anywhere
-    for c in candidates:
-        m = ANSWER_RE.search(c or "")
-        if m:
-            return m.group(0)
-    return None
+
+def brute_force(puzzle_or_text):
+    """Return the first ANS- code found by brute force, or None."""
+    found = _brute_answers(puzzle_or_text)
+    return found[0] if found else None
+
+
+def candidates(puzzle):
+    """Return an ordered list of distinct candidate answers, best first.
+
+    The declared codec's output leads (when it yields a valid answer), followed
+    by brute-force alternates.  The solver submits the first and, only if the
+    Game Master rejects it, falls back to the rest — so an unseen or ambiguous
+    codec still has a path to CORRECT without a human in the loop.
+    """
+    out = []
+    try:
+        ans = decode_known(puzzle)
+        if isinstance(ans, str):
+            m = ANSWER_RE.search(ans)
+            if m:
+                out.append(m.group(0))
+    except Exception:
+        pass
+    for a in _brute_answers(puzzle):
+        if a not in out:
+            out.append(a)
+    return out
 
 
 def decode(puzzle):
     """Decode a puzzle dict to an ANS- answer, with brute-force fallback.
 
     Returns (answer, codec_used). codec_used is the declared codec when it
-    produced a valid answer, else 'brute-force'.
+    produced a valid answer, else 'brute-force(<declared>)'.
     """
     codec = puzzle.get("codec")
     try:
         ans = decode_known(puzzle)
         if is_answer(ans):
             return ans, codec
-        # declared codec produced something; salvage an embedded ANS- if present
         if isinstance(ans, str):
             m = ANSWER_RE.search(ans)
             if m:

@@ -22,6 +22,7 @@ import sys
 import time
 
 import gamemaster as gm
+from decode import candidates as decode_candidates
 from decode import decode, is_answer
 from extract import extract
 
@@ -49,7 +50,8 @@ def resolve_ids(day):
 
 
 def _solve_one(challenge_id, question, index, single_delivery):
-    """Download + decode one question's artifact. Returns a result dict."""
+    """Download + decode one question's artifact. Returns a result dict with an
+    ordered list of candidate answers (best first) for retry-on-reject."""
     delivery = None if single_delivery else index
     raw = gm.artifact(challenge_id, delivery=delivery, timeout=30)
     info = extract(raw)
@@ -57,12 +59,15 @@ def _solve_one(challenge_id, question, index, single_delivery):
     if puzzle is None:
         # no puzzle json: fall back to any raw ANS- found in the bytes
         if info["raw_answer"] and is_answer(info["raw_answer"]):
-            answer, codec = info["raw_answer"], "raw-embedded"
+            answer, codec, cands = info["raw_answer"], "raw-embedded", [info["raw_answer"]]
         else:
             raise RuntimeError("no puzzle and no ANS- code in artifact for %s"
                                % question.get("id"))
     else:
         answer, codec = decode(puzzle)
+        cands = decode_candidates(puzzle) or [answer]
+        if answer not in cands:
+            cands.insert(0, answer)
 
     # sanity: case id embedded in the APK should match the question's case id
     qtext = question.get("question", "")
@@ -70,6 +75,8 @@ def _solve_one(challenge_id, question, index, single_delivery):
     return {
         "id": question["id"],
         "answer": answer,
+        "candidates": cands,
+        "cand_index": 0,
         "codec": codec,
         "case_id": info["case_id"],
         "case_match": case_ok,
@@ -114,11 +121,55 @@ def solve_mode(challenge_id, submit=False, parallel=True, fresh=False):
 
     if submit:
         sub = gm.submit(challenge_id, answers)
-        report["submit_result"] = sub.get("result")
+        result = sub.get("result")
+        attempts = [{"answers": dict(answers), "result": result}]
+
+        # Auto-recover: if the Game Master rejects some answers (a wrong decode
+        # on an unseen/ambiguous codec), advance those answer_ids to their next
+        # brute-force candidate and resubmit only the ones still outstanding.
+        # Submits are free within an attempt; this stays well inside the timer.
+        by_id = {r["id"]: r for r in results}
+        rounds = 0
+        while (result in ("incorrect", "accepted")) and rounds < 8:
+            failing = _failing_ids(sub, answers)
+            retry = {}
+            for qid in failing:
+                r = by_id.get(qid)
+                if not r:
+                    continue
+                r["cand_index"] += 1
+                if r["cand_index"] < len(r["candidates"]):
+                    retry[qid] = r["candidates"][r["cand_index"]]
+            if not retry:
+                break
+            answers = retry  # only resubmit the outstanding ids
+            sub = gm.submit(challenge_id, answers)
+            result = sub.get("result")
+            attempts.append({"answers": dict(answers), "result": result})
+            rounds += 1
+
+        report["submit_result"] = result
         report["submit_message"] = sub.get("message")
+        report["submit_attempts"] = attempts
         report["total_seconds"] = round(time.time() - t0, 2)
         report["remaining"] = sub.get("remaining")
     return report
+
+
+def _failing_ids(sub, submitted):
+    """Best-effort set of answer_ids the Game Master has not accepted yet.
+
+    Handles the documented shapes: an explicit list of outstanding ids under
+    'remaining'/'incorrect'/'pending', or — for a single wrong answer — the one
+    id just submitted.  Falls back to every submitted id.
+    """
+    for key in ("remaining", "incorrect", "pending", "unsolved"):
+        val = sub.get(key)
+        if isinstance(val, list) and val and all(isinstance(x, str) for x in val):
+            return [x for x in val if x in submitted]
+        if isinstance(val, dict):
+            return [x for x in val if x in submitted]
+    return list(submitted)
 
 
 def _print_report(rep, mode):
@@ -134,8 +185,10 @@ def _print_report(rep, mode):
         print("    %-12s %s  (codec=%s, case=%s match=%s)"
               % (r["id"], r["answer"], r["codec"], r["case_id"], match))
     if "submit_result" in rep:
+        n = len(rep.get("submit_attempts", []))
         print("  SUBMIT:", rep["submit_result"],
               ("| %s" % rep["submit_message"]) if rep.get("submit_message") else "",
+              ("| %d submit rounds" % n) if n > 1 else "",
               "| total: %ss" % rep.get("total_seconds"))
 
 
