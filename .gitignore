@@ -1,0 +1,10 @@
+# Never commit the Game Master credential
+.huntress_gm_token
+*.token
+# Downloaded artifacts / working data (untrusted bytes)
+work/
+downloads/
+*.apk
+*.bin
+__pycache__/
+*.pyc

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Thin launcher for the Huntress CTF mobile solver.
+# Runs from the trusted solver/ directory; artifact bytes are only ever read as
+# data (never executed), so no untrusted code path is imported.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec python3 "$here/solver/huntress.py" "$@"
