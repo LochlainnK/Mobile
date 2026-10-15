@@ -20,6 +20,8 @@ Known codecs (observed across released days 1-13):
     caesar   chr(ord(c)+key) per char        ; integer "key"  (decode: subtract)
     split    answer broken into "parts", reassembled by "order":
              out[order[i]] = parts[i]
+    native   data is the answer verbatim (day 15; themed around a native .so,
+             but the static blob is plain)
 
 All answers normalise to ``ANS-<16 uppercase hex>``.  The decoder is
 defensive: unknown or malformed codecs fall back to a brute-force search that
@@ -48,7 +50,10 @@ def decode_known(p):
     codec = p.get("codec")
     data = p.get("data")
 
-    if codec == "plain":
+    if codec in ("plain", "native"):
+        # 'native' (day 15, "native-library-secrets"): the APK ships a native
+        # .so as the intended reverse-engineering path, but the static puzzle
+        # blob carries the answer verbatim, exactly like 'plain'.
         return data
     if codec == "reverse":
         return data[::-1]

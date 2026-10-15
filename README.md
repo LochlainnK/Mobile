@@ -26,7 +26,7 @@ So the robust, fast path is: pull that blob out of the APK and decode it per
 its `codec`. Every answer is derived from the **real downloaded bytes** — never
 guessed — which is exactly what the event rules require.
 
-### Codecs seen across released days 1–13
+### Codecs seen across released days 1–15
 
 | codec    | decode                                                        |
 |----------|---------------------------------------------------------------|
@@ -37,6 +37,7 @@ guessed — which is exactly what the event rules require.
 | `xor`    | base64-decode, then XOR every byte with integer `key`        |
 | `caesar` | subtract integer `key` from each char code                   |
 | `split`  | reassemble `parts` by `order`: `out[order[i]] = parts[i]`    |
+| `native` | the answer verbatim (day 15; themed on a native `.so`, blob is plain) |
 
 The decoder handles all of these, **and** falls back to a brute-force sweep
 (reverse / base64 / hex / every caesar shift / every XOR key) that returns
