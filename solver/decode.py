@@ -77,6 +77,23 @@ def decode_known(p):
         for i, pos in enumerate(order):
             out[pos] = data[i]
         return "".join(out)
+    if codec == "layered":
+        # base64 -> xor each byte with (key + index) -> reverse
+        raw = _b64(data)
+        key = int(p["key"])
+        s = "".join(chr(b ^ ((key + i) & 0xFF)) for i, b in enumerate(raw))
+        out = s[::-1]
+        if ANSWER_FULL_RE.match(out):
+            return out
+        # tolerate variants: search small step/direction space
+        for rev in (True, False):
+            seq = raw[::-1] if rev else raw
+            for step in (1, -1, 0):
+                cand = "".join(chr(b ^ ((key + step * i) & 0xFF)) for i, b in enumerate(seq))
+                for c in (cand, cand[::-1]):
+                    if ANSWER_FULL_RE.match(c):
+                        return c
+        return out
     if codec == "table":
         # hex bytes with a per-index stepped offset: char[i] = byte[i]-key-step*i
         raw = bytes.fromhex(data)

@@ -1,0 +1,4 @@
+# For v2 "analysis" challenges (offline dex / native / reflection evaluation)
+androguard>=4.1
+unicorn>=2.0
+pyelftools>=0.29

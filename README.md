@@ -69,13 +69,33 @@ fastest shape and the server-preferred one ("Batch answers in one submit").
   `dynamic` (answer in a referenced member such as `assets/payload.dex`), plus a
   brute-force fallback that cracks unseen codec *names* (e.g. `native`,
   `reflection`, `packet`) whose data is still one of the known transforms.
+- **`huntress.mobile.puzzle.v1`** adds `layered` on later days (base64 → XOR
+  each byte with `key+index` → reverse).
+
 - **`huntress.mobile.puzzle.v2`** (`codec: "analysis"`, carries only a `build`
-  id) has **no embedded answer**. The evidence code is returned by the
-  challenge's local backend (`http://127.0.0.1:19090/.../evidence?case_id=...`)
-  in the **Huntress AI Homebase** workshop. From a bare cloud container that
-  backend is unreachable, so these are reported `BLOCKED` rather than guessed.
-  Run the same workflow from a Homebase (where `127.0.0.1:19090` resolves) to
-  complete them.
+  id) has **no embedded answer**. The APK itself *computes* the evidence code
+  in `...->Release;->code()` — a fixed chain of 64-bit integer ops over dex
+  constants — then posts it to a local backend. The backend is unreachable
+  from a cloud container, but the value is fully determined offline, so the
+  solver **evaluates `Release.code()` directly** with a small built-in Dalvik
+  emulator (`dexeval.py`). It covers everything these challenges use:
+  - arithmetic / shift / rotate on 64- and 32-bit values, branches, loops,
+    `packed-switch`, arrays (incl. signed `byte[]`), static fields (runs
+    `<clinit>`), and `StringBuilder`/`Long`/`String` modelling;
+  - **JNI native methods** — when the chain calls a `native` function whose
+    body is in `lib/<abi>/lib*.so`, it is emulated with Unicorn
+    (`nativeeval.py`): map the ELF, put the arg in the SysV register, run to
+    `ret`, read `rax`;
+  - **Java reflection** — `Class.forName` + `getDeclaredMethod` +
+    `Method.invoke` (the "reflection maze") are modelled so the real target
+    methods run;
+  - **split-APK assets** — a method that reads `assets/<name>` from a feature
+    module via `ZipFile`/`InputStream` is short-circuited to return the
+    embedded bytes.
+
+  Mastery bundles up to ~14 such deliveries (each a different day's variant);
+  they are evaluated in parallel and batch-submitted. Requires `androguard`,
+  `unicorn`, and `pyelftools` (`pip install androguard unicorn pyelftools`).
 
 Modes unlock in order: **Single Solve → Time Trial → Mastery** (each unlocks the
 next on solve). So a v2 Time Trial that can't be solved here leaves its Mastery
@@ -168,10 +188,9 @@ all comfortably inside the 30-second timed window.
 
 ### Coverage
 
-All offline-solvable mobile-android challenges through day 29 are solved:
-**75 / 87** (every Single Solve days 1–29, and Time Trial + Mastery for every v1
-day). The remaining 12 are the v2 "analysis" Time Trial + Mastery for days 23,
-24, 25, 26, 28, 29 — blocked only by the Homebase backend, not by the solver.
+**90 / 90** — every mobile-android challenge days 1–30, all three modes,
+solved and submitted `CORRECT`, including the v2 "analysis" Time Trial +
+Mastery (days 23–30) computed offline via the dex/native/reflection emulator.
 
 ## Layout
 

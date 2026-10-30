@@ -50,6 +50,19 @@ def resolve_ids(day):
     return {m: base + suf for m, suf in MODE_SUFFIX.items()}
 
 
+def _solve_v2(members):
+    """Compute a v2 'analysis' answer by emulating the dex's Release.code()."""
+    import dexeval
+    dex = None
+    for name, blob in (members or {}).items():
+        if name.endswith("classes.dex"):
+            dex = blob
+            break
+    if dex is None:
+        raise RuntimeError("v2 analysis: no classes.dex in artifact")
+    return dexeval.solve_analysis(dex, members)
+
+
 def _fetch_artifact(challenge_id, question, index, single_delivery, resp):
     """Fetch one question's artifact bytes, preferring the capability download.
 
@@ -81,7 +94,14 @@ def _solve_one(challenge_id, question, index, single_delivery, resp):
     info = extract(raw)
     puzzle = info["puzzle"]
     members = info.get("_blobs")
-    if puzzle is None:
+    is_v2 = puzzle and (puzzle.get("codec") == "analysis"
+                        or str(puzzle.get("schema", "")).endswith(".v2"))
+    if is_v2:
+        # v2 "analysis": no embedded answer — the evidence code is computed in
+        # the APK's dex (Release.code()). Emulate it offline from the dex bytes.
+        answer = _solve_v2(members)
+        codec, cands = "analysis(dex-eval)", [answer]
+    elif puzzle is None:
         # no puzzle json: fall back to any raw ANS- found in the bytes
         if info["raw_answer"] and is_answer(info["raw_answer"]):
             answer, codec, cands = info["raw_answer"], "raw-embedded", [info["raw_answer"]]
