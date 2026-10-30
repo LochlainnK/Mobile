@@ -80,6 +80,7 @@ def _solve_one(challenge_id, question, index, single_delivery, resp):
     raw = _fetch_artifact(challenge_id, question, index, single_delivery, resp)
     info = extract(raw)
     puzzle = info["puzzle"]
+    members = info.get("_blobs")
     if puzzle is None:
         # no puzzle json: fall back to any raw ANS- found in the bytes
         if info["raw_answer"] and is_answer(info["raw_answer"]):
@@ -88,8 +89,8 @@ def _solve_one(challenge_id, question, index, single_delivery, resp):
             raise RuntimeError("no puzzle and no ANS- code in artifact for %s"
                                % question.get("id"))
     else:
-        answer, codec = decode(puzzle)
-        cands = decode_candidates(puzzle) or [answer]
+        answer, codec = decode(puzzle, members)
+        cands = decode_candidates(puzzle, members) or [answer]
         if answer not in cands:
             cands.insert(0, answer)
 
@@ -139,6 +140,9 @@ def solve_mode(challenge_id, submit=False, parallel=True, fresh=False):
     """Solve one challenge (single/time/mastery). Returns a report dict."""
     t0 = time.time()
     resp = _begin(challenge_id, fresh)
+    if resp.get("error"):
+        return {"challenge": challenge_id, "error": resp["error"],
+                "message": resp.get("message")}
     questions = resp.get("questions", [])
     if not questions:
         return {"challenge": challenge_id, "error": "no questions in start response",
@@ -148,7 +152,13 @@ def solve_mode(challenge_id, submit=False, parallel=True, fresh=False):
     results = [None] * len(questions)
 
     def work(i):
-        return i, _solve_one(challenge_id, questions[i], i, single_delivery, resp)
+        try:
+            return i, _solve_one(challenge_id, questions[i], i, single_delivery, resp)
+        except Exception as e:  # one blocked delivery must not crash the batch
+            return i, {"id": questions[i].get("id"), "answer": None,
+                       "candidates": [], "cand_index": 0, "codec": None,
+                       "case_id": None, "case_match": None,
+                       "artifact": questions[i].get("artifact"), "error": str(e)}
 
     if parallel and len(questions) > 1:
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(questions)) as ex:
@@ -159,7 +169,8 @@ def solve_mode(challenge_id, submit=False, parallel=True, fresh=False):
             _, results[i] = work(i)
 
     decode_s = time.time() - t0
-    answers = {r["id"]: r["answer"] for r in results}
+    answers = {r["id"]: r["answer"] for r in results if r.get("answer")}
+    blocked = [r for r in results if not r.get("answer")]
 
     report = {
         "challenge": challenge_id,
@@ -169,8 +180,10 @@ def solve_mode(challenge_id, submit=False, parallel=True, fresh=False):
         "answers": answers,
         "decode_seconds": round(decode_s, 2),
     }
+    if blocked:
+        report["blocked"] = [{"id": r.get("id"), "error": r.get("error")} for r in blocked]
 
-    if submit:
+    if submit and answers and not blocked:
         sub = gm.submit(challenge_id, answers)
         result = sub.get("result")
         attempts = [{"answers": dict(answers), "result": result}]
@@ -225,13 +238,17 @@ def _failing_ids(sub, submitted):
 
 def _print_report(rep, mode):
     print("\n=== %s  [%s] ===" % (rep["challenge"], mode))
-    if rep.get("error"):
-        print("  ERROR:", rep["error"], "(start result: %s)" % rep.get("raw_result"))
+    if rep.get("error") and "questions" not in rep:
+        msg = rep.get("message") or rep.get("raw_result")
+        print("  BLOCKED:", rep["error"], ("- %s" % msg) if msg else "")
         return
     print("  start:", rep["start_result"],
           "| attempts_remaining:", rep.get("attempts_remaining"),
           "| decode: %ss" % rep["decode_seconds"])
     for r in rep["questions"]:
+        if not r.get("answer"):
+            print("    %-12s BLOCKED: %s" % (r.get("id"), r.get("error")))
+            continue
         match = {True: "ok", False: "MISMATCH", None: "n/a"}[r["case_match"]]
         print("    %-12s %s  (codec=%s, case=%s match=%s)"
               % (r["id"], r["answer"], r["codec"], r["case_id"], match))

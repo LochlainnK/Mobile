@@ -90,7 +90,20 @@ def _members(data):
 
 
 def extract(data):
-    """Return dict with puzzle (parsed json or None), case_id, raw_answer, members."""
+    """Return dict with puzzle (parsed json or None), case_id, raw_answer, members.
+
+    If the bytes are not an archive (e.g. the Game Master returned a JSON error
+    such as start_required), surface that under 'server_error' instead of
+    raising, so callers can report it cleanly.
+    """
+    if data[:2] != b"PK":
+        err = None
+        try:
+            err = json.loads(data).get("error")
+        except Exception:
+            pass
+        return {"puzzle": None, "case_id": None, "raw_answer": None,
+                "members": [], "_blobs": {}, "server_error": err or "not_an_archive"}
     members = _members(data)
 
     puzzle = None

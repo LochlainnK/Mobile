@@ -27,6 +27,8 @@ tries every known transform and returns whatever yields a valid answer.
 """
 
 import base64
+import copy
+import json
 import re
 
 ANSWER_RE = re.compile(r"ANS-[0-9A-F]{16}")
@@ -68,6 +70,22 @@ def decode_known(p):
         for i, pos in enumerate(order):
             out[pos] = parts[i]
         return "".join(out)
+    if codec == "indexed":
+        # character-level permutation: out[order[i]] = data[i]
+        order = p["order"]
+        out = [""] * len(order)
+        for i, pos in enumerate(order):
+            out[pos] = data[i]
+        return "".join(out)
+    if codec == "table":
+        # hex bytes with a per-index stepped offset: char[i] = byte[i]-key-step*i
+        raw = bytes.fromhex(data)
+        key = int(p["key"])
+        for step in range(0, 17):
+            s = "".join(chr((c - key - step * i) & 0xFF) for i, c in enumerate(raw))
+            if ANSWER_FULL_RE.match(s):
+                return s
+        return "".join(chr((c - key) & 0xFF) for c in raw)
     raise ValueError("unknown codec: %r" % codec)
 
 
@@ -144,38 +162,96 @@ def brute_force(puzzle_or_text):
     return found[0] if found else None
 
 
-def candidates(puzzle):
+def candidates(puzzle, members=None):
     """Return an ordered list of distinct candidate answers, best first.
 
     The declared codec's output leads (when it yields a valid answer), followed
-    by brute-force alternates.  The solver submits the first and, only if the
-    Game Master rejects it, falls back to the rest — so an unseen or ambiguous
-    codec still has a path to CORRECT without a human in the loop.
+    by a member scan and brute-force alternates.  The solver submits the first
+    and, only if the Game Master rejects it, falls back to the rest — so an
+    unseen or ambiguous codec still has a path to CORRECT with no human needed.
     """
     out = []
+    p = _prepare(puzzle, members)
     try:
-        ans = decode_known(puzzle)
+        ans = decode_known(p)
         if isinstance(ans, str):
             m = ANSWER_RE.search(ans)
             if m:
                 out.append(m.group(0))
     except Exception:
         pass
-    for a in _brute_answers(puzzle):
+    scanned = _scan_members(p, members)
+    if scanned and scanned not in out:
+        out.append(scanned)
+    for a in _brute_answers(p):
         if a not in out:
             out.append(a)
     return out
 
 
-def decode(puzzle):
+def _prepare(puzzle, members):
+    """Fill a split puzzle's empty parts from feature-module side files.
+
+    A split-APK (day 26) carries the base puzzle with one part blanked and the
+    missing piece in a sibling module's ``huntress_feature.json``
+    ({"part": ..., "part_index": N}).  We merge those in before decoding.
+    """
+    if not members or puzzle.get("codec") != "split":
+        return puzzle
+    if all(puzzle.get("parts", [])):  # no blank parts, nothing to merge
+        return puzzle
+    p = copy.deepcopy(puzzle)
+    for name, blob in members.items():
+        if name.endswith("huntress_feature.json"):
+            try:
+                feat = json.loads(blob)
+            except Exception:
+                continue
+            idx, part = feat.get("part_index"), feat.get("part")
+            if isinstance(idx, int) and isinstance(part, str) and 0 <= idx < len(p["parts"]):
+                p["parts"][idx] = part
+    return p
+
+
+def _scan_members(puzzle, members):
+    """For file-referenced codecs (e.g. 'dynamic'), pull the answer from the
+    member named by `data`, then from any member as a fallback."""
+    if not members:
+        return None
+    data = puzzle.get("data")
+    order = []
+    if isinstance(data, str) and data in members:
+        order.append(members[data])
+    order.extend(members.values())
+    for blob in order:
+        raw = blob if isinstance(blob, bytes) else str(blob).encode("latin-1", "replace")
+        m = ANSWER_RE.search(raw.decode("latin-1", "replace"))
+        if m:
+            return m.group(0)
+    return None
+
+
+def decode(puzzle, members=None):
     """Decode a puzzle dict to an ANS- answer, with brute-force fallback.
 
-    Returns (answer, codec_used). codec_used is the declared codec when it
-    produced a valid answer, else 'brute-force(<declared>)'.
+    `members` (name -> bytes of every file in the artifact) lets file-referenced
+    codecs resolve. Returns (answer, codec_used).
     """
     codec = puzzle.get("codec")
+    # v2 "analysis" puzzles carry no embedded answer: the evidence code is
+    # returned by the challenge's local backend (Homebase at 127.0.0.1:19090).
+    # Only flag it if nothing is recoverable from the artifact bytes.
+    if codec == "analysis" or str(puzzle.get("schema", "")).endswith(".v2"):
+        scanned = _scan_members(puzzle, members)
+        if scanned:
+            return scanned, "%s(member)" % codec
+        raise ValueError(
+            "v2 '%s' puzzle has no embedded answer; it requires the challenge "
+            "backend (Homebase 127.0.0.1:19090), unreachable from this container"
+            % codec)
+    p = _prepare(puzzle, members)
     try:
-        ans = decode_known(puzzle)
+        ans = decode_known(p)
         if is_answer(ans):
             return ans, codec
         if isinstance(ans, str):
@@ -184,7 +260,10 @@ def decode(puzzle):
                 return m.group(0), codec
     except Exception:
         pass
-    ans = brute_force(puzzle)
+    ans = _scan_members(p, members)
+    if ans:
+        return ans, "%s(member)" % codec
+    ans = brute_force(p)
     if ans:
         return ans, "brute-force(%s)" % codec
     raise ValueError("could not decode puzzle: %r" % puzzle)

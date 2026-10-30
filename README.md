@@ -59,6 +59,28 @@ reference embedded in each APK against the question text. All deliveries are
 downloaded + decoded **in parallel** and submitted in **one batch** — the
 fastest shape and the server-preferred one ("Batch answers in one submit").
 
+### Two puzzle schemas: v1 (embedded) vs v2 (backend analysis)
+
+- **`huntress.mobile.puzzle.v1`** embeds the evidence code in the APK and is
+  solved entirely offline. Codecs: `plain`, `reverse`, `base64`, `hex`, `xor`,
+  `caesar`, `split` (incl. empty parts filled from a split-APK's
+  `huntress_feature.json`), `indexed` (char permutation `out[order[i]]=data[i]`),
+  `table` (hex bytes with a per-index stepped offset `byte[i]-key-step*i`),
+  `dynamic` (answer in a referenced member such as `assets/payload.dex`), plus a
+  brute-force fallback that cracks unseen codec *names* (e.g. `native`,
+  `reflection`, `packet`) whose data is still one of the known transforms.
+- **`huntress.mobile.puzzle.v2`** (`codec: "analysis"`, carries only a `build`
+  id) has **no embedded answer**. The evidence code is returned by the
+  challenge's local backend (`http://127.0.0.1:19090/.../evidence?case_id=...`)
+  in the **Huntress AI Homebase** workshop. From a bare cloud container that
+  backend is unreachable, so these are reported `BLOCKED` rather than guessed.
+  Run the same workflow from a Homebase (where `127.0.0.1:19090` resolves) to
+  complete them.
+
+Modes unlock in order: **Single Solve → Time Trial → Mastery** (each unlocks the
+next on solve). So a v2 Time Trial that can't be solved here leaves its Mastery
+`prerequisite_required`.
+
 ### Two artifact-delivery contracts
 
 Days 1–13 serve the artifact directly from `?op=artifact[&delivery=i]`. From
@@ -143,6 +165,13 @@ variants** returned `CORRECT` for **every codec**:
 Plus Mastery batch submits: **3 deliveries** (day 1, `plain`, 1.8 s) and
 **5 deliveries** (day 8 `reverse` 2.9 s, day 9 `base64` 2.3 s) — all parallel,
 all comfortably inside the 30-second timed window.
+
+### Coverage
+
+All offline-solvable mobile-android challenges through day 29 are solved:
+**75 / 87** (every Single Solve days 1–29, and Time Trial + Mastery for every v1
+day). The remaining 12 are the v2 "analysis" Time Trial + Mastery for days 23,
+24, 25, 26, 28, 29 — blocked only by the Homebase backend, not by the solver.
 
 ## Layout
 
