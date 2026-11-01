@@ -87,12 +87,23 @@ class DexEvaluator:
         self._initialized = set()
         self._asset_cache = {}
         self.methods = {}  # (class_short, name) -> EncodedMethod
+        self._index(dex)
+        # Also index any secondary dex modules (e.g. assets/payload.dex loaded
+        # later via InMemoryDexClassLoader) so cross-dex reflective calls resolve.
+        from androguard.core.dex import DEX
+        for name, blob in (members or {}).items():
+            if name.endswith(".dex") and blob[:4] == b"dex\n":
+                try:
+                    self._index(DEX(blob))
+                except Exception:
+                    pass
+
+    def _index(self, dex):
         for cls in dex.get_classes():
-            cn = cls.get_name()
-            short = cn.split("/")[-1].rstrip(";")
+            short = cls.get_name().split("/")[-1].rstrip(";")
             for m in cls.get_methods():
                 if m.get_code():
-                    self.methods[(short, m.get_name())] = m
+                    self.methods.setdefault((short, m.get_name()), m)
 
     def _find(self, class_token, name):
         short = class_token.split("/")[-1].rstrip(";")
@@ -140,10 +151,14 @@ class DexEvaluator:
             jump = None
             if nm.startswith("const-string"):
                 reg[rv[0]] = self._string_operand(ins)
+            elif nm.startswith("const-class"):
+                tok = self._type_operand(ins)  # Lcom/..;
+                inner = tok[1:-1] if tok.startswith("L") else tok
+                reg[rv[0]] = inner.replace("/", ".")
             elif nm.startswith("const-wide"):
                 reg[rv[0]] = _u64(lits[0])
             elif nm.startswith("const"):
-                reg[rv[0]] = _u32(lits[0])
+                reg[rv[0]] = _u32(lits[0]) if lits else 0
             elif nm in ("move", "move/16", "move/from16", "move-object",
                         "move-object/16", "move-object/from16", "move-wide",
                         "move-wide/16", "move-wide/from16"):
@@ -313,11 +328,28 @@ class DexEvaluator:
                 return "".join(sb.parts)
             return sb
         if cls_tok.endswith("String;"):
+            s = reg[rv[0]]
             if mname == "charAt":
-                return ord(reg[rv[0]][_s32(reg[rv[1]])])
+                return ord(s[_s32(reg[rv[1]])])
             if mname == "equalsIgnoreCase":
                 return 1
-            return reg[rv[0]]
+            if mname == "indexOf":
+                ch = reg[rv[1]]
+                return s.find(chr(ch) if isinstance(ch, int) else str(ch))
+            if mname == "substring":
+                a = _s32(reg[rv[1]])
+                return s[a:_s32(reg[rv[2]])] if len(rv) > 2 else s[a:]
+            if mname == "length":
+                return len(s)
+            if mname in ("trim",):
+                return s.strip()
+            return s
+        if cls_tok.endswith("ClassLoader;"):
+            if mname == "loadClass":
+                return reg[rv[1]]            # dotted class name string
+            return 0                         # getClassLoader etc. -> unused
+        if cls_tok.endswith("ByteBuffer;") and mname == "wrap":
+            return 0                         # unused; dex resolved by name globally
         if cls_tok.endswith("Long;"):
             if mname == "toHexString":
                 return "%x" % (reg[rv[0]] & MASK64)
